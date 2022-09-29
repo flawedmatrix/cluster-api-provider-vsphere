@@ -365,11 +365,11 @@ func (r vmReconciler) reconcileNormal(ctx *context.VMContext) (reconcile.Result,
 // isWaitingForStaticIPAllocation checks whether the VM should wait for a static IP
 // to be allocated.
 // It checks the state of both DHCP4 and DHCP6 for all the network devices and if
-// any static IP addresses are specified.
+// any static IP addresses or IPAM Pools are specified.
 func (r vmReconciler) isWaitingForStaticIPAllocation(ctx *context.VMContext) bool {
 	devices := ctx.VSphereVM.Spec.Network.Devices
 	for _, dev := range devices {
-		if !dev.DHCP4 && !dev.DHCP6 && len(dev.IPAddrs) == 0 {
+		if !dev.DHCP4 && !dev.DHCP6 && len(dev.IPAddrs) == 0 && len(dev.FromPools) == 0 {
 			// Static IP is not available yet
 			return true
 		}

@@ -28,10 +28,13 @@ import (
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/pointer"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	capierrors "sigs.k8s.io/cluster-api/errors"
+	ipamv1 "sigs.k8s.io/cluster-api/exp/ipam/api/v1alpha1"
 	"sigs.k8s.io/cluster-api/util/conditions"
 
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1beta1"
@@ -46,10 +49,10 @@ import (
 type VMService struct{}
 
 // ReconcileVM makes sure that the VM is in the desired state by:
-//   1. Creating the VM if it does not exist, then...
-//   2. Updating the VM with the bootstrap data, such as the cloud-init meta and user data, before...
-//   3. Powering on the VM, and finally...
-//   4. Returning the real-time state of the VM to the caller
+//  1. Creating the VM if it does not exist, then...
+//  2. Updating the VM with the bootstrap data, such as the cloud-init meta and user data, before...
+//  3. Powering on the VM, and finally...
+//  4. Returning the real-time state of the VM to the caller
 func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMachine, _ error) {
 	// Initialize the result.
 	vm = infrav1.VirtualMachine{
@@ -121,6 +124,10 @@ func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMac
 	vms.reconcileUUID(vmCtx)
 
 	if err := vms.reconcileNetworkStatus(vmCtx); err != nil {
+		return vm, err
+	}
+
+	if ok, err := vms.reconcileIPAddressClaims(vmCtx); err != nil || !ok {
 		return vm, err
 	}
 
@@ -230,6 +237,60 @@ func (vms *VMService) reconcileNetworkStatus(ctx *virtualMachineContext) error {
 	}
 	ctx.State.Network = netStatus
 	return nil
+}
+
+func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool, error) {
+
+	// Get claims here and poppulate claims with mac address
+	// reconcile IPAM
+	// look at vspheremachine object
+	// for each device
+	// if it has fromPools, iterate over pools, create a claim for each
+
+	// ipaddressclaim name will be named as such <vmname>-<deviceidx>-<poolidx>
+
+	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
+		for poolRefIdx, poolRef := range device.FromPools {
+			// check if claim exists
+			ipAddrClaim := &ipamv1.IPAddressClaim{}
+			ipAddrClaimName := fmt.Sprintf("%s-%d-%d", ctx.VSphereVM.Name, devIdx, poolRefIdx)
+			ipAddrClaimKey := apitypes.NamespacedName{
+				Namespace: ctx.VSphereVM.Namespace,
+				Name:      ipAddrClaimName,
+			}
+			var err error
+			if err = ctx.Client.Get(ctx, ipAddrClaimKey, ipAddrClaim); err != nil && !apierrors.IsNotFound(err) {
+				return false, err
+			}
+			if apierrors.IsNotFound(err) {
+				claim := &ipamv1.IPAddressClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      ipAddrClaimName,
+						Namespace: ctx.VSphereVM.Namespace,
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion: ctx.VSphereVM.APIVersion,
+								Kind:       ctx.VSphereVM.Kind,
+								Name:       ctx.VSphereVM.Name,
+								UID:        ctx.VSphereVM.UID,
+							},
+						},
+					},
+					Spec: ipamv1.IPAddressClaimSpec{PoolRef: poolRef},
+				}
+				if err = ctx.Client.Create(ctx, claim); err != nil {
+					return false, err
+				}
+			}
+		}
+	}
+
+	// Out of scope for current story
+	// wait for claims to be fulfilled, return and requeue?
+	// when claims are complete, get IPs from IPAddr objs, assign to IPAddrs for each device
+
+	// ctx.Logger.Info("wait for VM metadata to be updated")
+	return false, nil
 }
 
 func (vms *VMService) reconcileMetadata(ctx *virtualMachineContext) (bool, error) {

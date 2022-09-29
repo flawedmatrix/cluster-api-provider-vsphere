@@ -30,6 +30,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	ipamv1a1 "sigs.k8s.io/cluster-api/exp/ipam/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	infrav1a3 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1alpha3"
@@ -64,6 +65,7 @@ func New(opts Options) (Manager, error) {
 	_ = ncpv1.AddToScheme(opts.Scheme)
 	_ = netopv1.AddToScheme(opts.Scheme)
 	_ = topologyv1.AddToScheme(opts.Scheme)
+	_ = ipamv1a1.AddToScheme(opts.Scheme)
 	// +kubebuilder:scaffold:scheme
 
 	podName, err := os.Hostname()

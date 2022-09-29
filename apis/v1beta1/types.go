@@ -20,6 +20,7 @@ package v1beta1
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
@@ -311,6 +312,11 @@ type NetworkDeviceSpec struct {
 	// addresses with DNS.
 	// +optional
 	SearchDomains []string `json:"searchDomains,omitempty"`
+
+	// FromPools is a list of IPAddressPools that should be assigned
+	// to IPAddressClaims. IPAddrs will be populated with IPAddresses
+	// fulfilled by an IPAM provider.
+	FromPools []corev1.TypedLocalObjectReference `json:"fromPools,omitempty"`
 }
 
 // NetworkRouteSpec defines a static network route.
