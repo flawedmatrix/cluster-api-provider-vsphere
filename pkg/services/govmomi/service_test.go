@@ -21,9 +21,11 @@ import (
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
+	ipamv1 "sigs.k8s.io/cluster-api/exp/ipam/api/v1alpha1"
 	ipamv1a1 "sigs.k8s.io/cluster-api/exp/ipam/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -31,7 +33,7 @@ import (
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
 )
 
-func Test_ShouldGenerateIPAddressClaims(t *testing.T) {
+func Test_reconcileIPAddressClaims_ShouldGenerateIPAddressClaims(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = ipamv1a1.AddToScheme(scheme)
 
@@ -84,7 +86,7 @@ func Test_ShouldGenerateIPAddressClaims(t *testing.T) {
 
 		reconciled, err := vms.reconcileIPAddressClaims(ctx)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(reconciled).To(BeFalse())
+		g.Expect(reconciled).To(BeTrue())
 
 		ipAddrClaimKey := apitypes.NamespacedName{
 			Name:      "vsphereVM1-0-0",
@@ -113,19 +115,91 @@ func Test_ShouldGenerateIPAddressClaims(t *testing.T) {
 		// Ensure that duplicate claims are not created
 		reconciled, err = vms.reconcileIPAddressClaims(ctx)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(reconciled).To(BeFalse())
+		g.Expect(reconciled).To(BeTrue())
 
 		ipAddrClaims := &ipamv1a1.IPAddressClaimList{}
 		ctx.Client.List(ctx, ipAddrClaims)
 		g.Expect(ipAddrClaims.Items).To(HaveLen(3))
+	})
+}
 
-		// simulate that the pool associated a ipaddr to the claim
+func Test_reconcileIPAddresses_ShouldUpdateVMDevicesWithAddresses(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = ipamv1a1.AddToScheme(scheme)
 
-		// reconcile again
-		// expect it returns true
-		// see that the vm device spec has ipAddr has the iP ? // not part of current commit/effort?
-		//
+	ctx := emptyVirtualMachineContext()
+	ctx.Client = fake.NewClientBuilder().WithScheme(scheme).Build()
 
+	myApiGroup := "my-pool-api-group"
+
+	claim1 := &ipamv1.IPAddressClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vsphereVM1-0-0",
+			Namespace: "my-namespace",
+		},
+		Spec: ipamv1.IPAddressClaimSpec{
+			PoolRef: corev1.TypedLocalObjectReference{
+				APIGroup: &myApiGroup,
+				Name:     "my-pool-1",
+				Kind:     "my-pool-kind",
+			},
+		},
+	}
+
+	address1 := &ipamv1.IPAddress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vsphereVM1-0-0",
+			Namespace: "my-namespace",
+		},
+		Spec: ipamv1.IPAddressSpec{
+			Address: "10.0.0.50",
+		},
+	}
+
+	ctx.Client.Create(ctx, claim1)
+
+	t.Run("when a device has a IPAddressPool", func(t *testing.T) {
+		ctx.VSphereVM = &infrav1.VSphereVM{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "vsphereVM1",
+				Namespace: "my-namespace",
+			},
+			Spec: infrav1.VSphereVMSpec{
+				VirtualMachineCloneSpec: infrav1.VirtualMachineCloneSpec{
+					Network: infrav1.NetworkSpec{
+						Devices: []infrav1.NetworkDeviceSpec{
+							{
+								FromPools: []corev1.TypedLocalObjectReference{
+									{
+										APIGroup: &myApiGroup,
+										Name:     "my-pool-1",
+										Kind:     "my-pool-kind",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		vms := &VMService{}
+		g := NewWithT(t)
+
+		// Address isn't there yet
+		reconciled, err := vms.reconcileIPAddresses(ctx)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		g.Expect(reconciled).To(BeFalse())
+
+		ctx.Client.Create(ctx, address1)
+		// Address isn't there yet
+		reconciled, err = vms.reconcileIPAddresses(ctx)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(reconciled).To(BeTrue())
+		g.Expect(ctx.VSphereVM.Spec.Network.Devices).To(HaveLen(1))
+		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].IPAddrs).To(HaveLen(1))
+		// g.Expect().To(Equal("10.0.0.50"))
 	})
 }
 

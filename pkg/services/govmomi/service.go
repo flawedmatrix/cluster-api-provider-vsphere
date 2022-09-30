@@ -240,15 +240,6 @@ func (vms *VMService) reconcileNetworkStatus(ctx *virtualMachineContext) error {
 }
 
 func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool, error) {
-
-	// Get claims here and poppulate claims with mac address
-	// reconcile IPAM
-	// look at vspheremachine object
-	// for each device
-	// if it has fromPools, iterate over pools, create a claim for each
-
-	// ipaddressclaim name will be named as such <vmname>-<deviceidx>-<poolidx>
-
 	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
 		for poolRefIdx, poolRef := range device.FromPools {
 			// check if claim exists
@@ -285,12 +276,42 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 		}
 	}
 
-	// Out of scope for current story
+	return true, nil
+}
+
+func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, error) {
 	// wait for claims to be fulfilled, return and requeue?
 	// when claims are complete, get IPs from IPAddr objs, assign to IPAddrs for each device
 
 	// ctx.Logger.Info("wait for VM metadata to be updated")
-	return false, nil
+	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
+		for poolRefIdx := range device.FromPools {
+			// check if claim exists
+			ipAddr := &ipamv1.IPAddress{}
+			ipAddrName := fmt.Sprintf("%s-%d-%d", ctx.VSphereVM.Name, devIdx, poolRefIdx)
+			ipAddrKey := apitypes.NamespacedName{
+				Namespace: ctx.VSphereVM.Namespace,
+				Name:      ipAddrName,
+			}
+			var err error
+			if err = ctx.Client.Get(ctx, ipAddrKey, ipAddr); err != nil {
+				return false, err
+			}
+
+			if ipAddr.Spec.Address == "" {
+				return false, errors.New(
+					fmt.Sprintf("address %s/%s Spec.Address is unset",
+						ipAddrKey.Name,
+						ipAddrKey.Namespace))
+			}
+
+			ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs = append(
+				ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs,
+				ipAddr.Spec.Address)
+		}
+	}
+
+	return true, nil
 }
 
 func (vms *VMService) reconcileMetadata(ctx *virtualMachineContext) (bool, error) {
