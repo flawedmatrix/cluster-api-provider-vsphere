@@ -259,16 +259,17 @@ rules:
 - apiGroups:
   - ipam.cluster.x-k8s.io
   resources:
-  - ipaddress
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - ipam.cluster.x-k8s.io
-  resources:
   - ipaddressclaims
   verbs:
   - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ipam.cluster.x-k8s.io
+  resources:
+  - ipaddresses
+  verbs:
   - get
   - list
   - watch

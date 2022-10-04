@@ -27,6 +27,7 @@ import (
 	"github.com/vmware/govmomi/property"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
+	"golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -128,6 +129,10 @@ func (vms *VMService) ReconcileVM(ctx *context.VMContext) (vm infrav1.VirtualMac
 	}
 
 	if ok, err := vms.reconcileIPAddressClaims(vmCtx); err != nil || !ok {
+		return vm, err
+	}
+
+	if ok, err := vms.reconcileIPAddresses(vmCtx); err != nil || !ok {
 		return vm, err
 	}
 
@@ -254,6 +259,7 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 				return false, err
 			}
 			if apierrors.IsNotFound(err) {
+				ctx.Logger.Info(fmt.Sprintf("creating IPAddressClaim %s", ipAddrClaimName))
 				claim := &ipamv1.IPAddressClaim{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      ipAddrClaimName,
@@ -280,10 +286,6 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 }
 
 func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, error) {
-	// wait for claims to be fulfilled, return and requeue?
-	// when claims are complete, get IPs from IPAddr objs, assign to IPAddrs for each device
-
-	// ctx.Logger.Info("wait for VM metadata to be updated")
 	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
 		for poolRefIdx := range device.FromPools {
 			// check if claim exists
@@ -305,9 +307,18 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 						ipAddrKey.Namespace))
 			}
 
-			ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs = append(
-				ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs,
-				ipAddr.Spec.Address)
+			toAdd := fmt.Sprintf("%s/%d", ipAddr.Spec.Address, ipAddr.Spec.Prefix)
+
+			if !slices.Contains(ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs, toAdd) {
+				ctx.Logger.Info(fmt.Sprintf("adding IPAddress to machine %s", ipAddr.Spec.Address))
+				ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs = append(
+					ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs,
+					toAdd,
+				)
+				//TODO: what if the ip addr is IPv6
+				//TODO: what if a different ip for this device has a different gateway
+				ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4 = ipAddr.Spec.Gateway
+			}
 		}
 	}
 
