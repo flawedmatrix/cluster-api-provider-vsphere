@@ -19,6 +19,7 @@ package govmomi
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 
 	"github.com/pkg/errors"
 	"github.com/vmware/govmomi/object"
@@ -42,7 +43,7 @@ import (
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/cluster"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/extra"
-	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/net"
+	govmominet "sigs.k8s.io/cluster-api-provider-vsphere/pkg/services/govmomi/net"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/util"
 )
 
@@ -315,9 +316,12 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 					ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs,
 					toAdd,
 				)
-				//TODO: what if the ip addr is IPv6
-				//TODO: what if a different ip for this device has a different gateway
-				ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4 = ipAddr.Spec.Gateway
+				gatewayIP := net.ParseIP(ipAddr.Spec.Gateway)
+				if gatewayIP.To4() != nil {
+					ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4 = ipAddr.Spec.Gateway
+				} else {
+					ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway6 = ipAddr.Spec.Gateway
+				}
 			}
 		}
 	}
@@ -547,7 +551,7 @@ func (vms *VMService) setMetadata(ctx *virtualMachineContext, metadata []byte) (
 }
 
 func (vms *VMService) getNetworkStatus(ctx *virtualMachineContext) ([]infrav1.NetworkStatus, error) {
-	allNetStatus, err := net.GetNetworkStatus(ctx, ctx.Session.Client.Client, ctx.Ref)
+	allNetStatus, err := govmominet.GetNetworkStatus(ctx, ctx.Session.Client.Client, ctx.Ref)
 	if err != nil {
 		return nil, err
 	}

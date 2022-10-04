@@ -133,20 +133,6 @@ func Test_reconcileIPAddresses_ShouldUpdateVMDevicesWithAddresses(t *testing.T) 
 
 	myApiGroup := "my-pool-api-group"
 
-	claim1 := &ipamv1.IPAddressClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vsphereVM1-0-0",
-			Namespace: "my-namespace",
-		},
-		Spec: ipamv1.IPAddressClaimSpec{
-			PoolRef: corev1.TypedLocalObjectReference{
-				APIGroup: &myApiGroup,
-				Name:     "my-pool-1",
-				Kind:     "my-pool-kind",
-			},
-		},
-	}
-
 	address1 := &ipamv1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "vsphereVM1-0-0",
@@ -170,7 +156,17 @@ func Test_reconcileIPAddresses_ShouldUpdateVMDevicesWithAddresses(t *testing.T) 
 		},
 	}
 
-	ctx.Client.Create(ctx, claim1)
+	address3 := &ipamv1.IPAddress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vsphereVM1-0-2",
+			Namespace: "my-namespace",
+		},
+		Spec: ipamv1.IPAddressSpec{
+			Address: "fe80::cccc:12",
+			Prefix:  64,
+			Gateway: "fe80::cccc:1",
+		},
+	}
 
 	t.Run("when a device has a IPAddressPool", func(t *testing.T) {
 		ctx.VSphereVM = &infrav1.VSphereVM{
@@ -194,6 +190,11 @@ func Test_reconcileIPAddresses_ShouldUpdateVMDevicesWithAddresses(t *testing.T) 
 										Name:     "my-pool-1",
 										Kind:     "my-pool-kind",
 									},
+									{
+										APIGroup: &myApiGroup,
+										Name:     "my-pool-ipv6",
+										Kind:     "my-pool-kind",
+									},
 								},
 							},
 						},
@@ -214,6 +215,7 @@ func Test_reconcileIPAddresses_ShouldUpdateVMDevicesWithAddresses(t *testing.T) 
 		// Simulate IP provider reconciling claim
 		ctx.Client.Create(ctx, address1)
 		ctx.Client.Create(ctx, address2)
+		ctx.Client.Create(ctx, address3)
 
 		// Now that claims are fulfilled, reconciling should update
 		// ipAddrs on network spec
@@ -221,11 +223,13 @@ func Test_reconcileIPAddresses_ShouldUpdateVMDevicesWithAddresses(t *testing.T) 
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(reconciled).To(BeTrue())
 		g.Expect(ctx.VSphereVM.Spec.Network.Devices).To(HaveLen(1))
-		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].IPAddrs).To(HaveLen(2))
+		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].IPAddrs).To(HaveLen(3))
 		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].IPAddrs[0]).To(Equal("10.0.0.50/24"))
 		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].Gateway4).To(Equal("10.0.0.1"))
 		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].IPAddrs[1]).To(Equal("10.0.1.50/30"))
 		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].Gateway4).To(Equal("10.0.0.1"))
+		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].IPAddrs[2]).To(Equal("fe80::cccc:12/64"))
+		g.Expect(ctx.VSphereVM.Spec.Network.Devices[0].Gateway6).To(Equal("fe80::cccc:1"))
 	})
 }
 
