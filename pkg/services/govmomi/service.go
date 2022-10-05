@@ -279,6 +279,12 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 				if err = ctx.Client.Create(ctx, claim); err != nil {
 					return false, err
 				}
+
+				conditions.MarkFalse(ctx.VSphereVM,
+					infrav1.IPAddressClaimedCondition,
+					infrav1.WaitingForIPAddressReason,
+					clusterv1.ConditionSeverityInfo,
+					"Waiting for IPAddressClaim to have an IPAddress bound")
 			}
 		}
 	}
@@ -288,43 +294,125 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 
 func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, error) {
 	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
+		ipAddrs := ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs
+		gateway4 := ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4
+		gateway6 := ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway6
+
 		for poolRefIdx := range device.FromPools {
 			// check if claim exists
+			ipAddrClaim := &ipamv1.IPAddressClaim{}
+			ipAddrClaimName := fmt.Sprintf("%s-%d-%d", ctx.VSphereVM.Name, devIdx, poolRefIdx)
+			ipAddrClaimKey := apitypes.NamespacedName{
+				Namespace: ctx.VSphereVM.Namespace,
+				Name:      ipAddrClaimName,
+			}
+			var err error
+			if err = ctx.Client.Get(ctx, ipAddrClaimKey, ipAddrClaim); err != nil && !apierrors.IsNotFound(err) {
+				return false, err
+			}
+
+			ipAddrName := ipAddrClaim.Status.AddressRef.Name
+			if ipAddrName == "" {
+				conditions.MarkFalse(ctx.VSphereVM,
+					infrav1.IPAddressClaimedCondition,
+					infrav1.WaitingForIPAddressReason,
+					clusterv1.ConditionSeverityInfo,
+					"Waiting for IPAddressClaim to have an IPAddress bound")
+				return false, nil
+			}
+
 			ipAddr := &ipamv1.IPAddress{}
-			ipAddrName := fmt.Sprintf("%s-%d-%d", ctx.VSphereVM.Name, devIdx, poolRefIdx)
 			ipAddrKey := apitypes.NamespacedName{
 				Namespace: ctx.VSphereVM.Namespace,
 				Name:      ipAddrName,
 			}
-			var err error
 			if err = ctx.Client.Get(ctx, ipAddrKey, ipAddr); err != nil {
 				return false, err
 			}
 
-			if ipAddr.Spec.Address == "" {
-				return false, errors.New(
-					fmt.Sprintf("address %s/%s Spec.Address is unset",
-						ipAddrKey.Name,
-						ipAddrKey.Namespace))
-			}
-
 			toAdd := fmt.Sprintf("%s/%d", ipAddr.Spec.Address, ipAddr.Spec.Prefix)
-
-			if !slices.Contains(ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs, toAdd) {
-				ctx.Logger.Info(fmt.Sprintf("adding IPAddress to machine %s", ipAddr.Spec.Address))
-				ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs = append(
-					ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs,
+			parsedIP, _, err := net.ParseCIDR(toAdd)
+			if err != nil {
+				msg := fmt.Sprintf("IPAddress %s/%s has invalid ip address: %q",
+					ipAddrKey.Namespace,
+					ipAddrKey.Name,
 					toAdd,
 				)
+				conditions.MarkFalse(ctx.VSphereVM,
+					infrav1.IPAddressClaimedCondition,
+					infrav1.IPAddressInvalidReason,
+					clusterv1.ConditionSeverityError,
+					msg)
+				return false, errors.New(msg)
+			}
+
+			if !slices.Contains(ipAddrs, toAdd) {
+				ipAddrs = append(ipAddrs, toAdd)
+
 				gatewayIP := net.ParseIP(ipAddr.Spec.Gateway)
+				if gatewayIP == nil {
+					msg := fmt.Sprintf("IPAddress %s/%s has invalid gateway: %q",
+						ipAddrKey.Namespace,
+						ipAddrKey.Name,
+						ipAddr.Spec.Gateway,
+					)
+					conditions.MarkFalse(ctx.VSphereVM,
+						infrav1.IPAddressClaimedCondition,
+						infrav1.IPAddressInvalidReason,
+						clusterv1.ConditionSeverityError,
+						msg)
+					return false, errors.New(msg)
+				}
+
+				if (parsedIP.To4() != nil) != (gatewayIP.To4() != nil) {
+					msg := fmt.Sprintf("IPAddress %s/%s has mismatched gateway and address IP families",
+						ipAddrKey.Namespace,
+						ipAddrKey.Name,
+					)
+					conditions.MarkFalse(ctx.VSphereVM,
+						infrav1.IPAddressClaimedCondition,
+						infrav1.IPAddressInvalidReason,
+						clusterv1.ConditionSeverityError,
+						msg)
+					return false, errors.New(msg)
+				}
+
 				if gatewayIP.To4() != nil {
-					ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4 = ipAddr.Spec.Gateway
+					if gateway4 != "" && gateway4 != ipAddr.Spec.Gateway {
+						msg := fmt.Sprintf("The IPv4 IPAddresses assigned to the same device (index %d) do not have the same gateway",
+							devIdx,
+						)
+						conditions.MarkFalse(ctx.VSphereVM,
+							infrav1.IPAddressClaimedCondition,
+							infrav1.IPAddressInvalidReason,
+							clusterv1.ConditionSeverityError,
+							msg)
+						return false, errors.New(msg)
+					}
+					gateway4 = ipAddr.Spec.Gateway
 				} else {
-					ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway6 = ipAddr.Spec.Gateway
+					if gateway6 != "" && gateway6 != ipAddr.Spec.Gateway {
+						msg := fmt.Sprintf("The IPv6 IPAddresses assigned to the same device (index %d) do not have the same gateway",
+							devIdx,
+						)
+						conditions.MarkFalse(ctx.VSphereVM,
+							infrav1.IPAddressClaimedCondition,
+							infrav1.IPAddressInvalidReason,
+							clusterv1.ConditionSeverityError,
+							msg)
+						return false, errors.New(msg)
+					}
+					gateway6 = ipAddr.Spec.Gateway
 				}
 			}
 		}
+
+		ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs = ipAddrs
+		ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4 = gateway4
+		ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway6 = gateway6
 	}
+
+	conditions.MarkTrue(ctx.VSphereVM, infrav1.IPAddressClaimedCondition)
 
 	return true, nil
 }
