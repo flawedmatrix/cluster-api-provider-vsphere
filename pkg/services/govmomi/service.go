@@ -293,10 +293,12 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 }
 
 func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, error) {
+	ctx.IPAMState = make([]infrav1.NetworkDeviceSpec, len(ctx.VSphereVM.Spec.Network.Devices))
 	for devIdx, device := range ctx.VSphereVM.Spec.Network.Devices {
-		ipAddrs := ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs
-		gateway4 := ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4
-		gateway6 := ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway6
+
+		var ipAddrs []string
+		var gateway4 string
+		var gateway6 string
 
 		for poolRefIdx := range device.FromPools {
 			// check if claim exists
@@ -364,7 +366,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 					return false, errors.New(msg)
 				}
 
-				if (parsedIP.To4() != nil) != (gatewayIP.To4() != nil) {
+				if isIPv4(parsedIP) != isIPv4(gatewayIP) {
 					msg := fmt.Sprintf("IPAddress %s/%s has mismatched gateway and address IP families",
 						ipAddrKey.Namespace,
 						ipAddrKey.Name,
@@ -407,14 +409,18 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 			}
 		}
 
-		ctx.VSphereVM.Spec.Network.Devices[devIdx].IPAddrs = ipAddrs
-		ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway4 = gateway4
-		ctx.VSphereVM.Spec.Network.Devices[devIdx].Gateway6 = gateway6
+		ctx.IPAMState[devIdx].IPAddrs = ipAddrs
+		ctx.IPAMState[devIdx].Gateway4 = gateway4
+		ctx.IPAMState[devIdx].Gateway6 = gateway6
 	}
 
 	conditions.MarkTrue(ctx.VSphereVM, infrav1.IPAddressClaimedCondition)
 
 	return true, nil
+}
+
+func isIPv4(ip net.IP) bool {
+	return ip.To4() != nil
 }
 
 func (vms *VMService) reconcileMetadata(ctx *virtualMachineContext) (bool, error) {
