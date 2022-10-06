@@ -279,12 +279,7 @@ func (vms *VMService) reconcileIPAddressClaims(ctx *virtualMachineContext) (bool
 				if err = ctx.Client.Create(ctx, claim); err != nil {
 					return false, err
 				}
-
-				conditions.MarkFalse(ctx.VSphereVM,
-					infrav1.IPAddressClaimedCondition,
-					infrav1.WaitingForIPAddressReason,
-					clusterv1.ConditionSeverityInfo,
-					"Waiting for IPAddressClaim to have an IPAddress bound")
+				markIPAddressClaimedConditionWaitingForClaimAddress(ctx.VSphereVM)
 			}
 		}
 	}
@@ -315,11 +310,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 
 			ipAddrName := ipAddrClaim.Status.AddressRef.Name
 			if ipAddrName == "" {
-				conditions.MarkFalse(ctx.VSphereVM,
-					infrav1.IPAddressClaimedCondition,
-					infrav1.WaitingForIPAddressReason,
-					clusterv1.ConditionSeverityInfo,
-					"Waiting for IPAddressClaim to have an IPAddress bound")
+				markIPAddressClaimedConditionWaitingForClaimAddress(ctx.VSphereVM)
 				return false, nil
 			}
 
@@ -340,12 +331,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 					ipAddrKey.Name,
 					toAdd,
 				)
-				conditions.MarkFalse(ctx.VSphereVM,
-					infrav1.IPAddressClaimedCondition,
-					infrav1.IPAddressInvalidReason,
-					clusterv1.ConditionSeverityError,
-					msg)
-				return false, errors.New(msg)
+				return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
 			}
 
 			if !slices.Contains(ipAddrs, toAdd) {
@@ -358,12 +344,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 						ipAddrKey.Name,
 						ipAddr.Spec.Gateway,
 					)
-					conditions.MarkFalse(ctx.VSphereVM,
-						infrav1.IPAddressClaimedCondition,
-						infrav1.IPAddressInvalidReason,
-						clusterv1.ConditionSeverityError,
-						msg)
-					return false, errors.New(msg)
+					return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
 				}
 
 				if isIPv4(parsedIP) != isIPv4(gatewayIP) {
@@ -371,12 +352,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 						ipAddrKey.Namespace,
 						ipAddrKey.Name,
 					)
-					conditions.MarkFalse(ctx.VSphereVM,
-						infrav1.IPAddressClaimedCondition,
-						infrav1.IPAddressInvalidReason,
-						clusterv1.ConditionSeverityError,
-						msg)
-					return false, errors.New(msg)
+					return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
 				}
 
 				if gatewayIP.To4() != nil {
@@ -384,12 +360,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 						msg := fmt.Sprintf("The IPv4 IPAddresses assigned to the same device (index %d) do not have the same gateway",
 							devIdx,
 						)
-						conditions.MarkFalse(ctx.VSphereVM,
-							infrav1.IPAddressClaimedCondition,
-							infrav1.IPAddressInvalidReason,
-							clusterv1.ConditionSeverityError,
-							msg)
-						return false, errors.New(msg)
+						return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
 					}
 					gateway4 = ipAddr.Spec.Gateway
 				} else {
@@ -397,12 +368,7 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 						msg := fmt.Sprintf("The IPv6 IPAddresses assigned to the same device (index %d) do not have the same gateway",
 							devIdx,
 						)
-						conditions.MarkFalse(ctx.VSphereVM,
-							infrav1.IPAddressClaimedCondition,
-							infrav1.IPAddressInvalidReason,
-							clusterv1.ConditionSeverityError,
-							msg)
-						return false, errors.New(msg)
+						return markIPAddressClaimedConditionInvalidIPWithError(ctx.VSphereVM, msg)
 					}
 					gateway6 = ipAddr.Spec.Gateway
 				}
@@ -417,10 +383,6 @@ func (vms *VMService) reconcileIPAddresses(ctx *virtualMachineContext) (bool, er
 	conditions.MarkTrue(ctx.VSphereVM, infrav1.IPAddressClaimedCondition)
 
 	return true, nil
-}
-
-func isIPv4(ip net.IP) bool {
-	return ip.To4() != nil
 }
 
 func (vms *VMService) reconcileMetadata(ctx *virtualMachineContext) (bool, error) {
@@ -726,4 +688,25 @@ func (vms *VMService) reconcileTags(ctx *virtualMachineContext) error {
 	}
 
 	return nil
+}
+
+func markIPAddressClaimedConditionInvalidIPWithError(vm *infrav1.VSphereVM, msg string) (bool, error) {
+	conditions.MarkFalse(vm,
+		infrav1.IPAddressClaimedCondition,
+		infrav1.IPAddressInvalidReason,
+		clusterv1.ConditionSeverityError,
+		msg)
+	return false, errors.New(msg)
+}
+
+func markIPAddressClaimedConditionWaitingForClaimAddress(vm *infrav1.VSphereVM) {
+	conditions.MarkFalse(vm,
+		infrav1.IPAddressClaimedCondition,
+		infrav1.WaitingForIPAddressReason,
+		clusterv1.ConditionSeverityInfo,
+		"Waiting for IPAddressClaim to have an IPAddress bound")
+}
+
+func isIPv4(ip net.IP) bool {
+	return ip.To4() != nil
 }
