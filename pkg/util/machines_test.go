@@ -239,6 +239,7 @@ func Test_GetMachineMetadata(t *testing.T) {
 		name            string
 		machine         *infrav1.VSphereVM
 		networkStatuses []infrav1.NetworkStatus
+		ipamState       []infrav1.NetworkDeviceSpec
 		expected        string
 	}{
 		{
@@ -646,12 +647,73 @@ network:
       dhcp6: true
 `,
 		},
+		{
+			name: "ipam",
+			machine: &infrav1.VSphereVM{
+				Spec: infrav1.VSphereVMSpec{
+					VirtualMachineCloneSpec: infrav1.VirtualMachineCloneSpec{
+						Network: infrav1.NetworkSpec{
+							Devices: []infrav1.NetworkDeviceSpec{
+								{
+									NetworkName: "network1",
+									MACAddr:     "00:00:00:00:00",
+								},
+								{
+									NetworkName: "network2",
+									MACAddr:     "00:00:00:00:02",
+								},
+							},
+						},
+					},
+				},
+			},
+			ipamState: []infrav1.NetworkDeviceSpec{
+				{
+					IPAddrs: []string{
+						"10.10.50.50/24",
+					},
+					Gateway4: "10.10.50.1",
+				},
+				{
+					IPAddrs: []string{
+						"fe80::3/64",
+					},
+					Gateway6: "fe80::1",
+				},
+			},
+			expected: `
+instance-id: "test-vm"
+local-hostname: "test-vm"
+wait-on-network:
+  ipv4: false
+  ipv6: false
+network:
+  version: 2
+  ethernets:
+    id0:
+      match:
+        macaddress: "00:00:00:00:00"
+      set-name: "eth0"
+      wakeonlan: true
+      addresses:
+      - "10.10.50.50/24"
+      gateway4: "10.10.50.1"
+    id1:
+      match:
+        macaddress: "00:00:00:00:02"
+      set-name: "eth1"
+      wakeonlan: true
+      addresses:
+      - "fe80::3/64"
+      gateway6: "fe80::1"
+`,
+		},
 	}
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			tc.machine.Name = tc.name
-			actVal, err := util.GetMachineMetadata("test-vm", *tc.machine, tc.networkStatuses...)
+			actVal, err := util.GetMachineMetadata("test-vm", *tc.machine, tc.ipamState, tc.networkStatuses...)
 			if err != nil {
 				t.Fatal(err)
 			}

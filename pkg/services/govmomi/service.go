@@ -391,7 +391,7 @@ func (vms *VMService) reconcileMetadata(ctx *virtualMachineContext) (bool, error
 		return false, err
 	}
 
-	newMetadata, err := util.GetMachineMetadata(ctx.VSphereVM.Name, *ctx.VSphereVM, ctx.State.Network...)
+	newMetadata, err := util.GetMachineMetadata(ctx.VSphereVM.Name, *ctx.VSphereVM, ctx.IPAMState, ctx.State.Network...)
 	if err != nil {
 		return false, err
 	}
